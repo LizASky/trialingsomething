@@ -3,7 +3,9 @@ import pandas as pd
 import random
 from datetime import datetime, timedelta
 
-# -------- Synthetic scenarios ---------
+# ===============================
+# Synthetic scenarios
+# ===============================
 SCENARIOS = {
     "Healthy connection": {
         "product": "Streaming TV",
@@ -42,10 +44,13 @@ SCENARIOS = {
         "customer_symptom": "Buffering or poor picture quality",
         "customer_impact_score": 7,
         "equipment_health": "OK"
-    },
+    }
 }
 
-# -------- Helper functions ---------
+# ===============================
+# Helper functions (RAG calculations etc.)
+# ===============================
+
 def safe_value(value, suffix=""):
     return "Not available" if value is None else f"{value}{suffix}"
 
@@ -61,11 +66,11 @@ def calculate_rssi_rag(rssi):
     if rssi is None:
         return "Grey", "WiFi signal telemetry unavailable"
     if rssi >= -67:
-        return "Green", "WiFi signal is healthy"
+        return "Green", "WiFi signal strength looks healthy"
     elif rssi >= -75:
-        return "Amber", "WiFi signal is degraded"
+        return "Amber", "WiFi signal strength is degraded"
     else:
-        return "Red", "WiFi signal is poor"
+        return "Red", "WiFi signal strength is poor"
 
 def calculate_packet_loss_rag(packet_loss):
     if packet_loss is None:
@@ -91,20 +96,20 @@ def calculate_reconnect_rag(rapid_reconnects):
     if rapid_reconnects is None:
         return "Grey", "Reconnect telemetry unavailable"
     if rapid_reconnects <= 1:
-        return "Green", "Reconnect behaviour stable"
+        return "Green", "Reconnect behaviour looks stable"
     elif rapid_reconnects <= 4:
-        return "Amber", "Some reconnect instability"
+        return "Amber", "Some reconnect instability detected"
     else:
-        return "Red", "Frequent reconnect instability"
+        return "Red", "Frequent reconnect instability detected"
 
 def calculate_line_health_rag(line_health):
     if line_health == "OK":
         return "Green", "Line health looks OK"
     if line_health == "Unstable":
-        return "Amber", "Line health unstable"
+        return "Amber", "Line health appears unstable"
     if line_health == "Fail":
-        return "Red", "Line health failed"
-    return "Grey", "Line health unknown"
+        return "Red", "Line health has failed"
+    return "Grey", "Line health is unknown"
 
 def calculate_telemetry_age_rag(age):
     if age is None:
@@ -114,7 +119,7 @@ def calculate_telemetry_age_rag(age):
     elif age <= 120:
         return "Amber", "Telemetry is slightly old"
     else:
-        return "Grey", "Telemetry too old for confident diagnosis"
+        return "Grey", "Telemetry is too old for confident diagnosis"
 
 def calculate_equipment_health_rag(health):
     if health == "OK":
@@ -123,6 +128,7 @@ def calculate_equipment_health_rag(health):
         return "Red", "Equipment fault suspected"
     return "Grey", "Equipment health unknown"
 
+# --- Build marker results
 def build_marker_results(t):
     results = []
     rssi_rag, rssi_reason = calculate_rssi_rag(t["rssi"])
@@ -151,13 +157,47 @@ def rollup_rag(marker_results):
         return "Amber"
     return "Green"
 
-# The remaining helper functions follow your original logic
-# Example build_hypotheses, choose_best_hypothesis, decide_action, randomise_scenario, etc.
+# --- Build hypotheses etc. (implement similarly to your previous logic) ---
 
-# For brevity, please include your previously developed functions here,
-# ensuring they appear before this main UI block
+# --- Randomize telemetry for demo ---
+def randomise_scenario(base):
+    t = base.copy()
+    if t["rssi"] is not None:
+        t["rssi"] = max(-95, min(-30, t["rssi"] + random.randint(-6, 6)))
+    if t["packet_loss"] is not None:
+        t["packet_loss"] = round(max(0, min(20, t["packet_loss"] + random.uniform(-1.8, 1.8))), 1)
+    if t["retransmission_rate"] is not None:
+        t["retransmission_rate"] = max(0, min(50, t["retransmission_rate"] + random.randint(-5, 5)))
+    if t["rapid_reconnects"] is not None:
+        t["rapid_reconnects"] = max(0, min(20, t["rapid_reconnects"] + random.randint(-2, 2)))
+    t["telemetry_age_minutes"] = max(1, min(600, t["telemetry_age_minutes"] + random.randint(-8, 8)))
+    return t
 
-# Summarize trend changes safely - MUST BE ABOVE USAGE
+# --- Synthetic history for trends ---
+def generate_synthetic_history(scenario_key):
+    base = SCENARIOS[scenario_key]
+    history = []
+    now = datetime.now()
+    for i in range(10):
+        timestamp = now - timedelta(hours=10 - i)
+        def jitter(val, low, high, scale=3):
+            if val is None:
+                return None
+            v = val + random.uniform(-scale, scale)
+            return max(low, min(high, v))
+        history.append({
+            "timestamp": timestamp,
+            "rssi": jitter(base["rssi"], -95, -30),
+            "packet_loss": jitter(base["packet_loss"], 0, 20),
+            "retransmission_rate": jitter(base["retransmission_rate"], 0, 50),
+            "rapid_reconnects": max(0, int(base["rapid_reconnects"] + random.randint(-1, 1)))
+        })
+    return history
+
+def plot_trends(history):
+    df = pd.DataFrame(history).set_index("timestamp")
+    return st.line_chart(df[["rssi", "packet_loss", "retransmission_rate", "rapid_reconnects"]])
+
 def summarize_trends(df):
     summaries = []
     if df["rssi"].iloc[-1] < df["rssi"].iloc[0]:
@@ -178,17 +218,7 @@ def summarize_trends(df):
         summaries.append("Rapid reconnects stable or decreased.")
     return " ".join(summaries)
 
-# Main UI code starts here
-
-if "result" not in st.session_state:
-    st.session_state.result = None
-
-if "telemetry" not in st.session_state:
-    st.session_state.telemetry = None
-
-if "scenario_used" not in st.session_state:
-    st.session_state.scenario_used = None
-
+# --- Main UI ---
 st.title("🛰️ Test SC Agentic AI Demo")
 
 random_mode = st.sidebar.checkbox("Random scenario every test", True)
@@ -196,17 +226,17 @@ selected_scenario = st.sidebar.selectbox("Or pick specific scenario", list(SCENA
 
 if st.button("🚀 Test my connection"):
     scenario = random.choice(list(SCENARIOS.keys())) if random_mode else selected_scenario
-    telemetry = randomise_scenario(SCENARIOS[scenario]) # define your function accordingly
+    telemetry = randomise_scenario(SCENARIOS[scenario])
     st.session_state.telemetry = telemetry
     st.session_state.scenario_used = scenario
-    st.session_state.result = run_agentic_test(telemetry, scenario) # define your function accordingly
+    # Note: ensure run_agentic_test is implemented per your logic
+    st.session_state.result = run_agentic_test(telemetry, scenario)
 
 if st.session_state.result:
     result = st.session_state.result
     action = result["action"]
     telemetry = st.session_state.telemetry
 
-    # Summary metrics below button
     cols = st.columns(5)
     cols[0].metric("Overall Status", rag_badge(result["overall_rag"]))
     cols[1].metric("Outcome", action["Outcome"])
@@ -232,7 +262,7 @@ if st.session_state.result:
             {"Field": "Packet Loss", "Value": safe_value(telemetry["packet_loss"], "%"), "Description": "Packet drop %"},
             {"Field": "Retransmission Rate", "Value": safe_value(telemetry["retransmission_rate"], "%"), "Description": "Retransmissions"},
             {"Field": "Rapid Reconnects", "Value": safe_value(telemetry["rapid_reconnects"]), "Description": "Fast reconnect events"},
-            {"Field": "Telemetry Age", "Value": f"{telemetry['telemetry_age_minutes']} minutes", "Description": "Data age"},
+            {"Field": "Telemetry Age", "Value": f"{telemetry['telemetry_age_minutes']} minutes", "Description": "Telemetry age"},
             {"Field": "Line Health", "Value": telemetry["line_health"], "Description": "Line status"},
             {"Field": "Known Outage", "Value": "Yes" if telemetry["known_outage"] else "No", "Description": "Known outages"},
             {"Field": "Equipment Health", "Value": telemetry["equipment_health"], "Description": "Equipment condition"},
@@ -244,7 +274,6 @@ if st.session_state.result:
     with tab2:
         st.header("Agentic AI Reasoning")
         st.text_area("Diagnostic Narrative", result["diagnostic_trace_text"], height=250, disabled=True)
-        st.subheader("Synthetic Trend Metrics")
         df_hist = pd.DataFrame(result["history"]).set_index("timestamp")
         st.line_chart(df_hist[["rssi", "packet_loss", "retransmission_rate", "rapid_reconnects"]])
         st.info(summarize_trends(df_hist))
@@ -260,11 +289,7 @@ if st.session_state.result:
         advisor_summary = {
             "Field": ["Outcome", "Recommended Action", "Chosen Hypothesis", "Confidence Level", "Risk Level"],
             "Value": [
-                action["Outcome"],
-                action["Action"],
-                result["chosen"]["Hypothesis"],
-                result["chosen"]["Confidence"],
-                action["Risk"]
+                action["Outcome"], action["Action"], result["chosen"]["Hypothesis"], result["chosen"]["Confidence"], action["Risk"]
             ]
         }
         st.table(pd.DataFrame(advisor_summary))
@@ -291,11 +316,9 @@ if st.session_state.result:
         st.markdown(f"**Next step:** {action['Action']}")
 
 else:
-    st.info("Click 'Test my connection' to start.")
+    st.info("Click 'Test my connection' to start your test.")
 
-# You need to add your earlier definitions for:
-# - randomise_scenario
-# - run_agentic_test
-# - all diagnostic helpers
-# above this UI code for the full app to work correctly.
-# Let me know if you’d like me to provide those as well.
+# --- Note ---
+# You still need to define or include `run_agentic_test` and its dependent functions (build_hypotheses, choose_best_hypothesis, decide_action, etc.)
+# as per your previous code. Let me know if you want me to provide their full code integrated too.
+
