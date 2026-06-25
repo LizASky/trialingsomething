@@ -3,7 +3,7 @@ import pandas as pd
 import random
 from datetime import datetime, timedelta
 
-# --- Synthetic scenarios ---
+# -------------------- Synthetic Scenarios --------------------
 SCENARIOS = {
     "Healthy connection": {
         "product": "Streaming TV",
@@ -45,7 +45,7 @@ SCENARIOS = {
     }
 }
 
-# Helper functions
+# -------------------- Helper Functions --------------------
 
 def safe_value(value, suffix=""):
     return "Not available" if value is None else f"{value}{suffix}"
@@ -58,17 +58,15 @@ def rag_badge(rag):
         "Grey": "⚪ Grey"
     }.get(rag, rag)
 
-
 def calculate_rssi_rag(rssi):
     if rssi is None:
         return "Grey", "WiFi signal telemetry unavailable"
     if rssi >= -67:
-        return "Green", "WiFi signal looks healthy"
+        return "Green", "WiFi signal is healthy"
     elif rssi >= -75:
         return "Amber", "WiFi signal is degraded"
     else:
         return "Red", "WiFi signal is poor"
-
 
 def calculate_packet_loss_rag(packet_loss):
     if packet_loss is None:
@@ -80,7 +78,6 @@ def calculate_packet_loss_rag(packet_loss):
     else:
         return "Red", "Packet loss is high"
 
-
 def calculate_retransmission_rag(rate):
     if rate is None:
         return "Grey", "Retransmission telemetry unavailable"
@@ -91,67 +88,66 @@ def calculate_retransmission_rag(rate):
     else:
         return "Red", "Retransmissions are high"
 
-
 def calculate_reconnect_rag(rapid_reconnects):
     if rapid_reconnects is None:
         return "Grey", "Reconnect telemetry unavailable"
     if rapid_reconnects <= 1:
-        return "Green", "Reconnect behaviour is stable"
+        return "Green", "Reconnect behavior is stable"
     elif rapid_reconnects <= 4:
-        return "Amber", "Some reconnect instability detected"
+        return "Amber", "Some reconnect instability"
     else:
-        return "Red", "Frequent reconnect instability detected"
-
+        return "Red", "Frequent reconnect instability"
 
 def calculate_line_health_rag(line_health):
     if line_health == "OK":
         return "Green", "Line health looks OK"
-    elif line_health == "Unstable":
-        return "Amber", "Line health appears unstable"
-    elif line_health == "Fail":
-        return "Red", "Line health has failed"
-    else:
-        return "Grey", "Line health is unknown"
-
+    if line_health == "Unstable":
+        return "Amber", "Line health unstable"
+    if line_health == "Fail":
+        return "Red", "Line health failed"
+    return "Grey", "Line health unknown"
 
 def calculate_telemetry_age_rag(age):
     if age is None:
-        return "Grey", "Telemetry timestamp unavailable"
+        return "Grey", "Telemetry age unknown"
     if age <= 30:
         return "Green", "Telemetry is fresh"
     elif age <= 120:
         return "Amber", "Telemetry is slightly old"
     else:
-        return "Grey", "Telemetry is too old for confident diagnosis"
+        return "Grey", "Telemetry too old for confident diagnosis"
 
-
-def calculate_equipment_health_rag(equipment_health):
-    if equipment_health == "OK":
+def calculate_equipment_health_rag(health):
+    if health == "OK":
         return "Green", "No suspected equipment fault"
-    elif equipment_health == "Suspected fault":
+    if health == "Suspected fault":
         return "Red", "Equipment fault suspected"
-    else:
-        return "Grey", "Equipment health is unknown"
-
+    return "Grey", "Equipment health unknown"
 
 def build_marker_results(t):
     results = []
     rssi_rag, rssi_reason = calculate_rssi_rag(t["rssi"])
     results.append({"Marker": "WiFi signal strength", "Value": safe_value(t["rssi"], " dBm"), "RAG": rssi_rag, "Reason": rssi_reason})
+
     packet_rag, packet_reason = calculate_packet_loss_rag(t["packet_loss"])
     results.append({"Marker": "Packet loss", "Value": safe_value(t["packet_loss"], "%"), "RAG": packet_rag, "Reason": packet_reason})
+
     retrans_rag, retrans_reason = calculate_retransmission_rag(t["retransmission_rate"])
     results.append({"Marker": "Retransmission rate", "Value": safe_value(t["retransmission_rate"], "%"), "RAG": retrans_rag, "Reason": retrans_reason})
+
     reconnect_rag, reconnect_reason = calculate_reconnect_rag(t["rapid_reconnects"])
     results.append({"Marker": "Rapid reconnects", "Value": safe_value(t["rapid_reconnects"]), "RAG": reconnect_rag, "Reason": reconnect_reason})
+
     line_rag, line_reason = calculate_line_health_rag(t["line_health"])
     results.append({"Marker": "Line health", "Value": t["line_health"], "RAG": line_rag, "Reason": line_reason})
+
     age_rag, age_reason = calculate_telemetry_age_rag(t["telemetry_age_minutes"])
     results.append({"Marker": "Telemetry freshness", "Value": f"{t['telemetry_age_minutes']} minutes old", "RAG": age_rag, "Reason": age_reason})
+
     equip_rag, equip_reason = calculate_equipment_health_rag(t["equipment_health"])
     results.append({"Marker": "Equipment health", "Value": t["equipment_health"], "RAG": equip_rag, "Reason": equip_reason})
-    return results
 
+    return results
 
 def rollup_rag(marker_results):
     rags = [m["RAG"] for m in marker_results]
@@ -163,152 +159,108 @@ def rollup_rag(marker_results):
         return "Grey"
     return "Green"
 
-
 def build_hypotheses(t, marker_results):
     lookup = {m["Marker"]: m for m in marker_results}
     hypotheses = []
     if t["known_outage"]:
-        hypotheses.append({
-            "Hypothesis": "Known service outage",
-            "Evidence": ["Known outage active"],
-            "Confidence": "High"
-        })
+        hypotheses.append({"Hypothesis": "Known service outage", "Evidence": ["Known outage active"], "Confidence": "High"})
         return hypotheses
     if lookup["Telemetry freshness"]["RAG"] == "Grey":
-        hypotheses.append({
-            "Hypothesis": "Telemetry missing or stale",
-            "Evidence": ["Telemetry too old/unavailable"],
-            "Confidence": "High"
-        })
+        hypotheses.append({"Hypothesis": "Telemetry missing or stale", "Evidence": ["Telemetry too old/unavailable", "Markers Grey"], "Confidence": "High"})
     if lookup["Equipment health"]["RAG"] == "Red":
-        hypotheses.append({
-            "Hypothesis": "Equipment replacement needed",
-            "Evidence": ["Suspected equipment fault", "Issue repeated"],
-            "Confidence": "High"
-        })
+        hypotheses.append({"Hypothesis": "Equipment replacement needed", "Evidence": ["Suspected equipment fault", "Issue repeated"], "Confidence": "High"})
     if lookup["Line health"]["RAG"] == "Red":
-        hypotheses.append({
-            "Hypothesis": "Engineer visit needed",
-            "Evidence": ["Line health failed", "Symptoms severe"],
-            "Confidence": "High"
-        })
+        hypotheses.append({"Hypothesis": "Engineer visit needed", "Evidence": ["Line health failed", "Symptoms severe"], "Confidence": "High"})
     if lookup["WiFi signal strength"]["RAG"] in ["Amber", "Red"]:
-        hypotheses.append({
-            "Hypothesis": "Poor WiFi signal or placement",
-            "Evidence": ["WiFi signal degraded"],
-            "Confidence": "Medium"
-        })
+        hypotheses.append({"Hypothesis": "Poor WiFi signal or placement", "Evidence": [f"WiFi signal flagged {lookup['WiFi signal strength']['RAG']}"], "Confidence": "Medium"})
     if lookup["Packet loss"]["RAG"] == "Red" and lookup["Retransmission rate"]["RAG"] in ["Amber", "Red"]:
-        hypotheses.append({
-            "Hypothesis": "WiFi interference or congestion",
-            "Evidence": ["Elevated packet loss and retransmissions"],
-            "Confidence": "Medium"
-        })
+        hypotheses.append({"Hypothesis": "WiFi interference or congestion", "Evidence": ["Packet loss Red", f"Retransmission rate {lookup['Retransmission rate']['RAG']}"], "Confidence": "Medium"})
     if lookup["Rapid reconnects"]["RAG"] in ["Amber", "Red"]:
-        hypotheses.append({
-            "Hypothesis": "Intermittent connectivity instability",
-            "Evidence": ["Frequent rapid reconnects"],
-            "Confidence": "Medium"
-        })
+        hypotheses.append({"Hypothesis": "Intermittent connection instability", "Evidence": [f"Rapid reconnects {lookup['Rapid reconnects']['RAG']}"], "Confidence": "Medium"})
     if not hypotheses:
-        hypotheses.append({
-            "Hypothesis": "Connection healthy",
-            "Evidence": ["No Red markers detected", "Telemetry fresh", "Line health OK"],
-            "Confidence": "High"
-        })
+        hypotheses.append({"Hypothesis": "Connection healthy", "Evidence": ["No Red markers", "Telemetry fresh", "Line health OK"], "Confidence": "High"})
     return hypotheses
-
 
 def choose_best_hypothesis(hypotheses):
     ranking = {"High": 3, "Medium": 2, "Low": 1}
-    return sorted(hypotheses, key=lambda x: ranking.get(x["Confidence"], 0), reverse=True)[0]
-
+    return sorted(hypotheses, key=lambda h: ranking.get(h["Confidence"], 0), reverse=True)[0]
 
 def decide_action(t, chosen, overall_rag):
     h = chosen["Hypothesis"]
-
     if t["known_outage"]:
         return {
             "Outcome": "Known outage detected",
-            "Action": "No action needed; issue being resolved.",
-            "Customer_message": "Known service issue affecting your connection.",
-            "Advisor_message": "Known outage active; no escalation needed.",
+            "Action": "No action needed; issue is being resolved.",
+            "Customer_message": "A known service outage is affecting your connection.",
+            "Advisor_message": "Known outage flagged; no action needed.",
             "Agentic_level": "Suppress troubleshooting",
             "Risk": "Low"
         }
-
     if "Telemetry missing or stale" in h:
         return {
             "Outcome": "Test incomplete",
-            "Action": "Please retry the test or contact support if problem persists.",
-            "Customer_message": "Unable to complete test due to missing or stale telemetry data.",
-            "Advisor_message": "Telemetry missing/stale; no firm diagnosis.",
+            "Action": "Please retry the test; escalate if issue persists.",
+            "Customer_message": "The test couldn't complete due to stale or missing data.",
+            "Advisor_message": "Telemetry is stale or missing; diagnosis unavailable.",
             "Agentic_level": "Retry",
             "Risk": "Low"
         }
-
     if "Equipment replacement needed" in h:
         return {
             "Outcome": "Replacement recommended",
-            "Action": "Offer replacement equipment to the customer.",
-            "Customer_message": "Your equipment may be faulty; replacement is recommended.",
-            "Advisor_message": "Suspected equipment fault; replacement recommended.",
+            "Action": "Arrange replacement equipment.",
+            "Customer_message": "Faulty equipment detected; replacement advised.",
+            "Advisor_message": "Equipment fault suspected; recommend replacement.",
             "Agentic_level": "Recommend replacement",
             "Risk": "Medium"
         }
-
     if "Engineer visit needed" in h:
         return {
             "Outcome": "Engineer visit required",
-            "Action": "Schedule an engineer visit.",
-            "Customer_message": "An issue was detected requiring an engineer visit.",
+            "Action": "Schedule engineer appointment.",
+            "Customer_message": "Issue requires technician intervention.",
             "Advisor_message": "Line failure detected; escalate to engineer.",
             "Agentic_level": "Escalate",
-            "Risk": "Medium"
+            "Risk": "High"
         }
-
     if "Poor WiFi signal or placement" in h:
         return {
             "Outcome": "Weak WiFi signal",
-            "Action": "Advise moving closer to router or using WiFi boosters.",
-            "Customer_message": "Weak WiFi signal detected; try moving closer to your router.",
-            "Advisor_message": "Weak WiFi signal; recommend in-home fixes.",
+            "Action": "Optimize device placement or add boosters.",
+            "Customer_message": "Weak WiFi detected; move device closer to router.",
+            "Advisor_message": "Poor WiFi detected; advise home fixes first.",
             "Agentic_level": "Recommend fix",
             "Risk": "Low"
         }
-
     if "WiFi interference or congestion" in h:
         return {
             "Outcome": "WiFi interference detected",
-            "Action": "Optimize WiFi setup and retest.",
-            "Customer_message": "Possible WiFi interference or congestion detected.",
-            "Advisor_message": "Packet loss and retransmissions indicate interference.",
+            "Action": "Optimize WiFi and retest.",
+            "Customer_message": "WiFi interference or congestion detected.",
+            "Advisor_message": "High packet loss and retransmissions indicate interference.",
             "Agentic_level": "Recommend optimization",
             "Risk": "Low"
         }
-
-    if "Intermittent connectivity instability" in h:
+    if "Intermittent connection instability" in h:
         return {
             "Outcome": "Unstable connection detected",
             "Action": "Monitor and retest; escalate if persistent.",
-            "Customer_message": "Connection instability detected; please retest.",
-            "Advisor_message": "Connection instability; monitor for escalation.",
+            "Customer_message": "Connection unstable; please monitor and retest.",
+            "Advisor_message": "Instability detected; follow-up recommended.",
             "Agentic_level": "Monitor",
             "Risk": "Medium"
         }
-
     return {
         "Outcome": "No issue found",
-        "Action": "No action needed. Please monitor your connection.",
+        "Action": "No action needed now.",
         "Customer_message": "Your connection appears healthy.",
         "Advisor_message": "No fault detected.",
         "Agentic_level": "Explain",
         "Risk": "Low"
     }
 
-
 def randomise_scenario(base):
-    = base.copy()
+    t = base.copy()
     if t["rssi"] is not None:
         t["rssi"] = max(-95, min(-30, t["rssi"] + random.randint(-6, 6)))
     if t["packet_loss"] is not None:
@@ -357,9 +309,8 @@ def summarize_trends(df):
     if df["rapid_reconnects"].iloc[-1] > df["rapid_reconnects"].iloc[0]:
         summaries.append("Rapid reconnects are more frequent, showing instability.")
     else:
-        summaries.append("Rapid reconnects stable or decreased.")
+        summaries.append("Rapid reconnects are stable or decreased.")
     return " ".join(summaries)
-
 
 def build_detailed_customer_message(t, markers, action):
     lines = []
@@ -369,7 +320,6 @@ def build_detailed_customer_message(t, markers, action):
     lines.append(f"Recommended action: {action['Action']}")
     lines.append(f"Advice: {action['Customer_message']}")
     return "\n".join(lines)
-
 
 def build_detailed_advisor_message(t, markers, action, hypotheses):
     lines = []
@@ -388,15 +338,14 @@ def build_detailed_advisor_message(t, markers, action, hypotheses):
     lines.append(f"Risk Level: {action['Risk']}")
     return "\n".join(lines)
 
-
 def run_agentic_test(t, scenario_key):
     markers = build_marker_results(t)
     overall_rag = rollup_rag(markers)
     hypotheses = build_hypotheses(t, markers)
     chosen = choose_best_hypothesis(hypotheses)
     action = decide_action(t, chosen, overall_rag)
-    cust_msg = build_detailed_customer_message(t, markers, action)
-    adv_msg = build_detailed_advisor_message(t, markers, action, hypotheses)
+    detailed_customer_message = build_detailed_customer_message(t, markers, action)
+    detailed_advisor_message = build_detailed_advisor_message(t, markers, action, hypotheses)
     diagnostic_trace_text = f"Chosen hypothesis: {chosen['Hypothesis']} (Confidence: {chosen['Confidence']})\nAction taken: {action['Action']}"
     history = generate_synthetic_history(scenario_key)
     return {
@@ -405,13 +354,14 @@ def run_agentic_test(t, scenario_key):
         "hypotheses": hypotheses,
         "chosen": chosen,
         "action": action,
-        "detailed_customer_message": cust_msg,
-        "detailed_advisor_message": adv_msg,
+        "detailed_customer_message": detailed_customer_message,
+        "detailed_advisor_message": detailed_advisor_message,
         "diagnostic_trace_text": diagnostic_trace_text,
         "history": history
     }
 
-# --- Streamlit main UI ---
+# --- Streamlit app UI ---
+
 if "result" not in st.session_state:
     st.session_state.result = None
 if "telemetry" not in st.session_state:
@@ -422,7 +372,7 @@ if "scenario_used" not in st.session_state:
 st.title("🛰️ Test SC Agentic AI Demo")
 
 random_mode = st.sidebar.checkbox("Random scenario every test", True)
-selected_scenario = st.sidebar.selectbox("Or pick specific scenario", list(SCENARIOS.keys()))
+selected_scenario = st.sidebar.selectbox("Or select specific scenario", list(SCENARIOS.keys()))
 
 if st.button("🚀 Test my connection"):
     scenario = random.choice(list(SCENARIOS.keys())) if random_mode else selected_scenario
@@ -438,10 +388,10 @@ if st.session_state.result:
 
     cols = st.columns(5)
     cols[0].metric("Overall Status", rag_badge(result["overall_rag"]))
-    cols[1].metric("Outcome", action.get("Outcome", "Unknown"))
-    cols[2].metric("Confidence", result["chosen"].get("Confidence", "Unknown"))
-    cols[3].metric("Risk", action.get("Risk", "Unknown"))
-    cols[4].metric("Next Step Type", action.get("Agentic_level", "Unknown"))
+    cols[1].metric("Outcome", action.get("Outcome", "N/A"))
+    cols[2].metric("Confidence", result["chosen"].get("Confidence", "N/A"))
+    cols[3].metric("Risk", action.get("Risk", "N/A"))
+    cols[4].metric("Next Step Type", action.get("Agentic_level", "N/A"))
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Telemetry",
@@ -485,18 +435,19 @@ if st.session_state.result:
 
     with tab4:
         st.header("Advisor View")
-        summary_data = {
-            "Field": ["Outcome", "Recommended Action", "Chosen Hypothesis", "Confidence", "Risk"],
+        advisor_summary = {
+            "Field": ["Outcome", "Recommended Action", "Chosen Hypothesis", "Confidence Level", "Risk Level"],
             "Value": [
-                action.get("Outcome", "Unknown"),
-                action.get("Action", "Unknown"),
-                result["chosen"].get("Hypothesis", "Unknown"),
-                result["chosen"].get("Confidence", "Unknown"),
-                action.get("Risk", "Unknown"),
+                action.get("Outcome", "N/A"),
+                action.get("Action", "N/A"),
+                result["chosen"].get("Hypothesis", "N/A"),
+                result["chosen"].get("Confidence", "N/A"),
+                action.get("Risk", "N/A"),
             ]
         }
-        st.table(pd.DataFrame(summary_data))
-        st.subheader("Hypotheses and Evidence")
+        st.table(pd.DataFrame(advisor_summary))
+
+        st.subheader("Hypotheses & Evidence")
         for hyp in result["hypotheses"]:
             st.markdown(f"**{hyp['Hypothesis']}** — Confidence: {hyp['Confidence']}")
             st.write(", ".join(hyp["Evidence"]))
@@ -510,7 +461,7 @@ if st.session_state.result:
             "Unstable connection detected": "Monitor your connection and retest. Contact support if problems persist.",
             "Engineer visit required": "An engineer visit is recommended to resolve your issue.",
             "Replacement recommended": "We recommend you arrange a replacement for faulty equipment.",
-            "Known outage detected": "There a known service outage. Please wait for resolution updates.",
+            "Known outage detected": "There is a known service outage. Please wait for resolution updates.",
             "Test incomplete": "The test could not complete. Please try again or contact support.",
             "No issue found": "Your connection is healthy. No further action needed."
         }
@@ -519,6 +470,4 @@ if st.session_state.result:
         st.markdown(f"**Next step:** {action.get('Action', 'No further action needed')}")
 else:
     st.info("Click 'Test my connection' to start.")
-
-
 
