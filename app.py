@@ -90,7 +90,7 @@ def calculate_packet_loss_rag(packet_loss):
     elif packet_loss <= 3:
         return "Amber", "Packet loss is elevated"
     else:
- return "Red", "Packet loss is high"
+        return "Red", "Packet loss is high"
 
 def calculate_retransmission_rag(retransmission_rate):
     if retransmission_rate is None:
@@ -359,4 +359,562 @@ def decide_action(t, chosen, overall_rag):
     if "Poor WiFi signal" in h:
         if t["pod_present"]:
             next_step = "Move closer to the hub or pod, then test again."
+            advisor_note = "Pod present. Recommend placement guidance and retest before replacement or engineer."
+        else:
+            next_step = "Move closer to the hub or consider adding a WiFi booster/pod, then test again."
+            advisor_note = "No pod present. Recommend in-home WiFi improvement before escalation."
+
+        return {
+            "Outcome": "Weak WiFi signal",
+            "Action": next_step,
+            "Customer_message": f"The test found weak WiFi signal where the device is being used. {next_step}",
+            "Advisor_message": advisor_note,
+            "Agentic_level": "Recommend in-home fix",
+            "Risk": "Low"
+        }
+
+    if "interference or congestion" in h:
+        return {
+            "Outcome": "WiFi interference detected",
+            "Action": "Optimise the WiFi setup and test again.",
+            "Customer_message": "The test found signs of WiFi interference or congestion. The next step is to improve the WiFi setup and run the test again.",
+            "Advisor_message": "Packet loss and retransmissions indicate likely interference/congestion. Recommend WiFi optimisation before engineer route.",
+            "Agentic_level": "Recommend optimisation",
+            "Risk": "Low"
+        }
+
+    if "Intermittent connectivity" in h:
+        return {
+            "Outcome": "Unstable connection detected",
+            "Action": "Monitor and retest. If it keeps happening, route to replacement or engineer depending on repeat evidence.",
+            "Customer_message": "The test found signs that the connection is unstable. Please test again if it continues. If it keeps happening, the next step may be replacement equipment or an engineer.",
+            "Advisor_message": "Instability detected. Use repeat history to decide whether replacement or engineer route is more suitable.",
+            "Agentic_level": "Monitor / recommend next route",
+            "Risk": "Medium"
+        }
+
+    return {
+        "Outcome": "No issue found",
+        "Action": "No action needed. Monitor and test again if the issue continues.",
+        "Customer_message": "The connection test did not find a problem from the available synthetic data. No action is needed right now.",
+        "Advisor_message": "No fault detected from this run. Reassure customer and avoid unnecessary intervention.",
+        "Agentic_level": "Explain / reassure",
+        "Risk": "Low"
+    }
+
+# ===============================
+# Enhanced Explanation Builders
+# ===============================
+
+def build_detailed_customer_message(t, marker_results, action):
+    lookup = {m["Marker"]: m for m in marker_results}
+    lines = []
+
+    rssi_rag = lookup["WiFi signal strength"]["RAG"]
+    rssi_val = safe_value(t["rssi"], " dBm")
+    if rssi_rag in ["Amber", "Red"]:
+        lines.append(
+            f"Your device's WiFi signal strength is {rssi_val}, which is "
+            f"{'below ideal levels, which can cause buffering or disconnections.' if rssi_rag == 'Red' else 'weaker than optimal and may affect performance.'}"
+        )
+
+    packet_rag = lookup["Packet loss"]["RAG"]
+    packet_val = safe_value(t["packet_loss"], "%")
+    if packet_rag in ["Amber", "Red"]:
+        lines.append(
+            f"Packet loss is at {packet_val}, indicating { 'significant data loss impacting quality' if packet_rag == 'Red' else 'some data loss affecting connection stability.'}"
+        )
+
+    retrans_rag = lookup["Retransmission rate"]["RAG"]
+    retrans_val = safe_value(t["retransmission_rate"], "%")
+    if retrans_rag in ["Amber", "Red"]:
+        lines.append(
+            f"Data retransmissions are {retrans_val}, meaning data packets are being resent frequently due to errors, which can degrade your experience."
+        )
+
+    reconnect_rag = lookup["Rapid reconnects"]["RAG"]
+    reconnect_val = safe_value(t["rapid_reconnects"])
+    if reconnect_rag in ["Amber", "Red"]:
+        lines.append(
+            f"There were {reconnect_val} rapid reconnect events recently, indicating your connection sometimes drops and quickly reconnects — causing instability."
+        )
+
+    line_rag = lookup["Line health"]["RAG"]
+    if line_rag == "Red":
+        lines.append(
+            "The line health is failing, which usually means a serious issue with your broadband line requiring technician intervention."
+        )
+    elif line_rag == "Amber":
+        lines.append(
+            "The line health is unstable, which might result in intermittent connection issues."
+        )
+
+    equipment_rag = lookup["Equipment health"]["RAG"]
+    if equipment_rag == "Red":
+        lines.append(
+            "There are signs your equipment may be faulty and could need replacement."
+        )
+
+    if action.get("Customer_message"):
+        lines.append(action["Customer_message"])
+
+    return " ".join(lines)
+
+def build_detailed_advisor_message(t, marker_results, action, hypotheses):
+    lookup = {m["Marker"]: m for m in marker_results}
+    lines = []
+
+    if t["known_outage"]:
+        lines.append("Known outage detected: normal troubleshooting suspended.")
+    elif t["telemetry_age_minutes"] > 120:
+        lines.append(f"Telemetry data is stale: {t['telemetry_age_minutes']} minutes old.")
+
+    for marker in marker_results:
+        lines.append(
+            f"{marker['Marker']}: {marker['Value']} — {marker['Reason']}"
+        )
+
+    lines.append("Hypotheses evaluated:")
+    for h in hypotheses:
+        evidence_str = "; ".join(h["Evidence"])
+        lines.append(
+            f"- {h['Hypothesis']} (Confidence: {h['Confidence']})\n  Evidence: {evidence_str}"
+        )
+
+    lines.append(f"Chosen hypothesis: {action['Outcome']}")
+    lines.append(f"Recommended action: {action['Action']}")
+    lines.append(f"Risk level: {action['Risk']}")
+
+    return "\n".join(lines)
+
+# ===============================
+# Adaptive Feedback System
+# ===============================
+
+def add_feedback():
+    st.subheader("Feedback - Help us improve!")
+    feedback = st.radio("How useful was this diagnostic?", options=["Select", "Very useful", "Somewhat useful", "Not useful"], horizontal=True)
+    comments = st.text_area("Additional comments or suggestions:")
+    submitted = st.button("Submit Feedback")
+
+    if submitted:
+        if feedback == "Select":
+            st.warning("Please select a feedback rating before submitting.")
+            return
+        feedback_record = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "scenario": st.session_state.get("scenario_used", "Unknown"),
+            "feedback": feedback,
+            "comments": comments,
+            "chosen_outcome": st.session_state.result["action"]["Outcome"] if st.session_state.result else "Unknown"
+        }
+        st.session_state.feedback_log.append(feedback_record)
+        st.success("Thank you for your feedback!")
+
+# ===============================
+# Synthetic Historical Data Generator & Trend Visualization
+# ===============================
+
+def generate_synthetic_history(scenario_key, points=10):
+    base = SCENARIOS[scenario_key]
+    history = []
+    now = datetime.now()
+
+    for i in range(points):
+        # Simulate timestamp equally spaced back
+        timestamp = now - timedelta(hours=points - i)
+
+        # Introduce some jitter/randomness for history metrics
+        def jitter(val, low, high, scale=3):
+            if val is None:
+                return None
+            v = val + random.uniform(-scale, scale)
+            return max(low, min(high, v))
+
+        record = {
+            "timestamp": timestamp,
+            "rssi": jitter(base["rssi"], -95, -30),
+            "packet_loss": jitter(base["packet_loss"], 0, 20),
+            "retransmission_rate": jitter(base["retransmission_rate"], 0, 50),
+            "rapid_reconnects": max(0, int(base["rapid_reconnects"] + random.randint(-1, 1))),
+            "telemetry_age_minutes": max(1, base["telemetry_age_minutes"] + random.randint(-5, 5)),
+            "line_health": base["line_health"],
+            "equipment_health": base["equipment_health"]
+        }
+        history.append(record)
+    return history
+
+def plot_trends(history):
+    df = pd.DataFrame(history)
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["rssi"], mode='lines+markers', name="RSSI (dBm)", line=dict(color='royalblue')))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["packet_loss"], mode='lines+markers', name="Packet Loss (%)", line=dict(color='firebrick')))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["retransmission_rate"], mode='lines+markers', name="Retransmission Rate (%)", line=dict(color='green')))
+    fig.add_trace(go.Scatter(x=df["timestamp"], y=df["rapid_reconnects"], mode='lines+markers', name="Rapid Reconnects", line=dict(color='orange')))
+
+    fig.update_layout(
+        title="Connection Metrics Over Time (Simulated History)",
+        xaxis_title="Timestamp",
+        yaxis_title="Value",
+        legend_title="Metrics",
+        hovermode="x unified",
+        height=400,
+        margin=dict(t=50, b=40)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    return df
+
+def summarize_trends(df):
+    summaries = []
+    # Simple logic to detect worsening trend for RSSI (signal getting weaker)
+    if df["rssi"].iloc[-1] < df["rssi"].iloc[0]:
+        summaries.append("WiFi signal strength (RSSI) has decreased over time, indicating possible worsening coverage.")
+    else:
+        summaries.append("WiFi signal strength (RSSI) is stable or improved.")
+
+    # For packet loss
+    if df["packet_loss"].iloc[-1] > df["packet_loss"].iloc[0]:
+        summaries.append("Packet loss has increased over time, which may affect streaming quality.")
+    else:
+        summaries.append("Packet loss is stable or improved.")
+
+    # For retransmission rate
+    if df["retransmission_rate"].iloc[-1] > df["retransmission_rate"].iloc[0]:
+        summaries.append("Retransmission rate increased, suggesting more errors in data transmission.")
+    else:
+        summaries.append("Retransmission rate is stable or improved.")
+
+    # Rapid reconnects
+    if df["rapid_reconnects"].iloc[-1] > df["rapid_reconnects"].iloc[0]:
+        summaries.append("Rapid reconnect events have become more frequent, indicating unstable connection.")
+    else:
+        summaries.append("Rapid reconnects are stable or reduced.")
+
+    return " ".join(summaries)
+
+# ===============================
+# Natural Language Generation (Simple Template-based)
+# ===============================
+
+def nlg_template(explanation_type, context):
+    if explanation_type == "customer":
+        templates = [
+            "We've observed that {detail}, which could be the reason for your experience.",
+            "Your connection shows {detail}, potentially impacting service quality.",
+            "Analysis indicates {detail}, recommending action accordingly."
+        ]
+        import random
+        template = random.choice(templates)
+        return template.format(detail=context)
+    elif explanation_type == "advisor":
+        return f"Diagnostic system indicates: {context}"
+    else:
+        return context
+
+# ===============================
+# Interactive Troubleshooting Flow
+# ===============================
+
+def troubleshooting_step_1():
+    st.write("### Step 1: Please select the main symptom you observe.")
+    choice = st.radio(
+        "What problem are you experiencing?",
+        ["No issues", "Buffering/Slow streaming", "Frequent disconnections", "Other"]
+    )
+    st.session_state["troubleshoot_symptom"] = choice
+    if choice != "No issues":
+        st.session_state["troubleshoot_step"] = 2
+        st.experimental_rerun()
+
+def troubleshooting_step_2():
+    st.write("### Step 2: Additional details.")
+    if st.session_state.get("troubleshoot_symptom") == "Buffering/Slow streaming":
+        st.write("Is this happening on multiple devices or just one?")
+        multi = st.radio("Select one:", ["One device", "Multiple devices"])
+        st.session_state["troubleshoot_multi_devices"] = multi
+    elif st.session_state.get("troubleshoot_symptom") == "Frequent disconnections":
+        st.write("Does disconnection happen mostly during WiFi or wired connections?")
+        conn = st.radio("Select one:", ["WiFi", "Wired"])
+        st.session_state["troubleshoot_conn_type"] = conn
+    else:
+        st.write("Please describe briefly:")
+        desc = st.text_area("Description")
+        st.session_state["troubleshoot_other_desc"] = desc
+
+    if st.button("Continue"):
+        st.session_state["troubleshoot_step"] = 3
+        st.experimental_rerun()
+
+def troubleshooting_step_3():
+    st.write("### Step 3: Suggested next steps based on your input")
+    symptom = st.session_state.get("troubleshoot_symptom")
+    multi = st.session_state.get("troubleshoot_multi_devices", "N/A")
+    conn = st.session_state.get("troubleshoot_conn_type", "N/A")
+    desc = st.session_state.get("troubleshoot_other_desc", "")
+
+    if symptom == "Buffering/Slow streaming" and multi == "Multiple devices":
+        st.write("You may be experiencing WiFi congestion or broadband throughput issues. Please try optimizing your WiFi channels or contact support if persistent.")
+    elif symptom == "Frequent disconnections" and conn == "WiFi":
+        st.write("Check WiFi signal strength and reduce interference near your router. Consider relocating devices closer to the hub or rebooting your router.")
+    elif symptom == "Other":
+        if desc:
+            st.write(f"Thanks for your input: '{desc}'. Our team may follow up with detailed advice.")
+        else:
+            st.write("Please share more details with support if issues persist.")
+    else:
+        st.write("Currently no issues detected based on your input.")
+    
+    if st.button("Restart Troubleshooting"):
+        for key in ["troubleshoot_symptom", "troubleshoot_multi_devices", "troubleshoot_conn_type", "troubleshoot_other_desc", "troubleshoot_step"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.experimental_rerun()
+
+
+# ===============================
+# Store Synthetic Multi-modal logs/errors (Mock)
+# ===============================
+
+def mock_log_input():
+    st.subheader("Add mock device logs or error codes (for demo)")
+    log = st.text_area("Paste device/system log excerpts or error codes here:")
+    if st.button("Submit Logs"):
+        if "logs" not in st.session_state:
+            st.session_state["logs"] = []
+        st.session_state["logs"].append({
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "log": log
+        })
+        st.success("Log saved.")
+
+def display_logs():
+    st.subheader("Submitted Logs / Error Codes")
+    logs = st.session_state.get("logs", [])
+    if logs:
+        df_logs = pd.DataFrame(logs)
+        st.dataframe(df_logs, use_container_width=True)
+    else:
+        st.info("No logs submitted yet.")
+
+# ===============================
+# Confidence & Uncertainty Messaging
+# ===============================
+
+def confidence_message(confidence):
+    messages = {
+        "High": "High confidence in this diagnosis and recommendation.",
+        "Medium": "Moderate confidence; consider follow-up behavior or retesting.",
+        "Low": "Low confidence; further investigation or data collection recommended."
+    }
+    return messages.get(confidence, "No confidence rating available.")
+
+# ===============================
+# Simple Personalization
+# ===============================
+
+def personalization_select():
+    st.sidebar.header("User Profile (Demo)")
+    user_type = st.sidebar.selectbox("Select user type:", ["General Customer", "Tech-Savvy Customer", "Advisor"])
+    st.session_state["user_type"] = user_type
+
+# ===============================
+# Telemetry Randomization (as before)
+# ===============================
+
+def randomise_scenario(base):
+    t = base.copy()
+
+    if t["rssi"] is not None:
+        t["rssi"] = max(-95, min(-30, t["rssi"] + random.randint(-6, 6)))
+
+    if t["packet_loss"] is not None:
+        t["packet_loss"] = round(max(0, min(20, t["packet_loss"] + random.uniform(-1.8, 1.8))), 1)
+
+    if t["retransmission_rate"] is not None:
+        t["retransmission_rate"] = max(0, min(50, t["retransmission_rate"] + random.randint(-5, 5)))
+
+    if t["rapid_reconnects"] is not None:
+        t["rapid_reconnects"] = max(0, min(20, t["rapid_reconnects"] + random.randint(-2, 2)))
+
+    t["telemetry_age_minutes"] = max(1, min(600, t["telemetry_age_minutes"] + random.randint(-8, 8)))
+
+    return t
+
+# ===============================
+# Main Agentic AI test executor (integrate explanations & feedback & diagnostics)
+# ===============================
+
+def run_agentic_test(t):
+    marker_results = build_marker_results(t)
+    overall_rag = rollup_rag(marker_results)
+    hypotheses = build_hypotheses(t, marker_results)
+    chosen = choose_best_hypothesis(hypotheses)
+    action = decide_action(t, chosen, overall_rag)
+    detailed_customer_message = build_detailed_customer_message(t, marker_results, action)
+    detailed_advisor_message = build_detailed_advisor_message(t, marker_results, action, hypotheses)
+    
+    # Diagnostic trace: detailed step-by-step (simplified for brevity)
+    diagnostic_trace = (
+        f"Telemetry freshness: {t['telemetry_age_minutes']} mins.\n"
+        f"Known outage: {'Yes' if t['known_outage'] else 'No'}.\n"
+        f"Hypotheses: " + ", ".join(h['Hypothesis'] + f"({h['Confidence']})" for h in hypotheses) + "\n"
+        f"Chosen Hypothesis: {chosen['Hypothesis']}.\n"
+        f"Action: {action['Action']}.\n"
+        f"Confidence: {chosen['Confidence']}."
+    )
+    
+    # Generate synthetic history for trends
+    history = generate_synthetic_history(st.session_state.scenario_used)
+
+    return {
+        "marker_results": marker_results,
+        "overall_rag": overall_rag,
+        "hypotheses": hypotheses,
+        "chosen": chosen,
+        "action": action,
+        "detailed_customer_message": detailed_customer_message,
+        "detailed_advisor_message": detailed_advisor_message,
+        "diagnostic_trace_text": diagnostic_trace,
+        "history": history
+    }
+
+
+# ===============================
+# ------------------ Streamlit App Start ------------------
+# ===============================
+
+# Initialize session states
+for key in ["feedback_log", "logs"]:
+    if key not in st.session_state:
+        st.session_state[key] = []
+
+personalization_select()
+
+st.title("🛰️ Test SC Enhanced Agentic AI Connection Diagnosis")
+
+with st.sidebar:
+    st.header("Demo mode")
+    st.write("Select connection scenario and options:")
+    random_mode = st.checkbox("Random scenario on each test", value=True)
+    selected_scenario = st.selectbox("Or select specific scenario:", list(SCENARIOS.keys()))
+    st.markdown("---")
+    st.write("### Multi-step troubleshooting")
+    if st.button("Start troubleshooting"):
+        st.session_state["troubleshoot_step"] = 1
+        st.experimental_rerun()
+    st.markdown("---")
+    st.write("### Submit Device Logs / Errors")
+    mock_log_input()
+    st.markdown("---")
+    st.write("### Feedback")
+    add_feedback()
+
+# Troubleshooting flow control
+if st.session_state.get("troubleshoot_step") == 1:
+    troubleshooting_step_1()
+    st.stop()
+elif st.session_state.get("troubleshoot_step") == 2:
+    troubleshooting_step_2()
+    st.stop()
+elif st.session_state.get("troubleshoot_step") == 3:
+    troubleshooting_step_3()
+    st.stop()
+
+# Run test button and logic
+run_button = st.button("🚀 Test my connection")
+
+if run_button or ("result" in st.session_state and st.session_state["result"]):
+    if run_button:
+        if random_mode:
+            scenario_name = random.choice(list(SCENARIOS.keys()))
+        else:
+            scenario_name = selected_scenario
+        telemetry = randomise_scenario(SCENARIOS[scenario_name])
+        st.session_state.telemetry = telemetry
+        st.session_state.scenario_used = scenario_name
+        st.session_state.result = run_agentic_test(telemetry)
+
+    result = st.session_state.result
+    telemetry = st.session_state.telemetry
+    action = result["action"]
+
+    st.markdown(f"### Synthetic scenario used: **{st.session_state.scenario_used}**")
+
+    # Output key metrics
+    cols = st.columns(4)
+    cols[0].metric("Overall status", rag_badge(result["overall_rag"]))
+    cols[1].metric("Outcome", action["Outcome"])
+    cols[2].metric("Confidence", result["chosen"]["Confidence"])
+    cols[3].metric("Next step type", action["Agentic_level"])
+
+    # Show detailed customer message with NLG variation depending on user type
+    user_type = st.session_state.get("user_type", "General Customer")
+    cust_msg = result["detailed_customer_message"]
+    if user_type == "Tech-Savvy Customer" or user_type == "Advisor":
+        # Use advisor style explanation for tech or advisor
+        st.info(result["detailed_advisor_message"])
+    else:
+        # Use customer style explanation with some NLG variation
+        st.success(nlg_template("customer", cust_msg))
+
+    st.subheader("Recommended next step")
+    st.write(action["Action"])
+    st.write(confidence_message(result["chosen"]["Confidence"]))
+
+    # Show trend visualization for synthetic history data
+    st.markdown("---")
+    st.subheader("Connection metrics trend over recent hours")
+    df_history = plot_trends(result["history"])
+    trend_summary = summarize_trends(df_history)
+    st.info(trend_summary)
+
+    # Show telemetry used in table
+    st.markdown("---")
+    st.subheader("Synthetic telemetry inputs")
+    telemetry_df = pd.DataFrame([
+        {"Field": "Product", "Value": telemetry["product"], "Meaning": "Service area"},
+        {"Field": "Device type", "Value": telemetry["device_type"], "Meaning": "Tested device"},
+        {"Field": "Connection method", "Value": telemetry["connection_method"], "Meaning": "Setup used"},
+        {"Field": "RSSI", "Value": safe_value(telemetry["rssi"], " dBm"), "Meaning": "WiFi signal strength"},
+        {"Field": "Packet loss", "Value": safe_value(telemetry["packet_loss"], "%"), "Meaning": "Dropped packets (%)"},
+        {"Field": "Retransmission rate", "Value": safe_value(telemetry["retransmission_rate"], "%"), "Meaning": "Packets resent (%)"},
+        {"Field": "Rapid reconnects", "Value": safe_value(telemetry["rapid_reconnects"]), "Meaning": "Reconnect events"},
+        {"Field": "Telemetry age", "Value": f"{telemetry['telemetry_age_minutes']} minutes", "Meaning": "Data freshness"},
+        {"Field": "Line health", "Value": telemetry["line_health"], "Meaning": "Broadband line status"},
+        {"Field": "Known outage", "Value": "Yes" if telemetry["known_outage"] else "No", "Meaning": "Wider outage status"},
+        {"Field": "Equipment health", "Value": telemetry["equipment_health"], "Meaning": "Device health assessment"},
+        {"Field": "Customer symptom", "Value": telemetry["customer_symptom"], "Meaning": "Reported issue"},
+        {"Field": "Customer impact score", "Value": f"{telemetry['customer_impact_score']}/10", "Meaning": "Severity estimate"},
+    ])
+    st.dataframe(telemetry_df, use_container_width=True, hide_index=True)
+
+    # Display marker results
+    st.markdown("---")
+    st.subheader("Marker evaluations")
+    marker_df = pd.DataFrame(result["marker_results"])
+    marker_df["RAG"] = marker_df["RAG"].apply(rag_badge)
+    st.dataframe(marker_df, use_container_width=True, hide_index=True)
+
+    # Diagnostic reasoning detail
+    st.markdown("---")
+    st.subheader("Diagnostic reasoning narrative")
+    st.text_area("Reasoning details", result["diagnostic_trace_text"], height=240, disabled=True)
+
+    # Device logs submission and display
+    st.markdown("---")
+    display_logs()
+
+    # Feedback log
+    st.markdown("---")
+    st.subheader("Feedback Summary")
+    if st.session_state.feedback_log:
+        df_feedback = pd.DataFrame(st.session_state.feedback_log)
+        st.dataframe(df_feedback, use_container_width=True)
+    else:
+        st.info("No feedback submitted yet.")
+
+else:
+    st.info("Click 'Test my connection' to simulate a connection diagnosis.")
+
 
