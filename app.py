@@ -3,18 +3,55 @@ import pandas as pd
 import random
 from datetime import datetime, timedelta
 
-# --- Helper functions and diagnostics logic ---
+# ===== Synthetic Telemetry Scenarios =====
+SCENARIOS = {
+    "Healthy connection": {
+        "product": "Streaming TV",
+        "device_type": "Streaming device",
+        "connection_method": "5GHz WiFi",
+        "rssi": -55,
+        "packet_loss": 0.3,
+        "retransmission_rate": 3,
+        "rapid_reconnects": 0,
+        "telemetry_age_minutes": 12,
+        "line_health": "OK",
+        "known_outage": False,
+        "repeat_issue_7_days": False,
+        "previous_outcome": "No previous journey",
+        "hub_model": "Hub 6",
+        "pod_present": False,
+        "customer_symptom": "No issue reported",
+        "customer_impact_score": 1,
+        "equipment_health": "OK"
+    },
+    "Buffering on streaming device": {
+        "product": "Streaming TV",
+        "device_type": "Streaming device",
+        "connection_method": "2.4GHz WiFi",
+        "rssi": -82,
+        "packet_loss": 2.8,
+        "retransmission_rate": 14,
+        "rapid_reconnects": 3,
+        "telemetry_age_minutes": 15,
+        "line_health": "OK",
+        "known_outage": False,
+        "repeat_issue_7_days": True,
+        "previous_outcome": "Self-serve guidance shown",
+        "hub_model": "Hub 6",
+        "pod_present": True,
+        "customer_symptom": "Buffering or poor picture quality",
+        "customer_impact_score": 7,
+        "equipment_health": "OK"
+    }
+}
+
+# ===== Helper Functions =====
 
 def safe_value(value, suffix=""):
     return "Not available" if value is None else f"{value}{suffix}"
 
 def rag_badge(rag):
-    return {
-        "Green": "🟢 Green",
-        "Amber": "🟠 Amber",
-        "Red": "🔴 Red",
-        "Grey": "⚪ Grey"
-    }.get(rag, rag)
+    return {"Green": "🟢 Green", "Amber": "🟠 Amber", "Red": "🔴 Red", "Grey": "⚪ Grey"}.get(rag, rag)
 
 def calculate_rssi_rag(rssi):
     if rssi is None:
@@ -139,22 +176,78 @@ def choose_best_hypothesis(hyps):
 def decide_action(t, chosen, overall_rag):
     h = chosen["Hypothesis"]
     if t["known_outage"]:
-        return {"Outcome": "Known outage detected", "Action": "No action needed.", "Customer_message": "Known service issue; no action required.", "Advisor_message": "Known outage; no escalation.", "Agentic_level": "Suppress troubleshooting", "Risk": "Low"}
+        return {
+            "Outcome": "Known outage detected",
+            "Action": "No action needed.",
+            "Customer_message": "Known service issue; no action required.",
+            "Advisor_message": "Known outage; no escalation.",
+            "Agentic_level": "Suppress troubleshooting",
+            "Risk": "Low"
+        }
     if "Telemetry missing or stale" in h:
-        return {"Outcome": "Test incomplete", "Action": "Retry test; escalate if persists.", "Customer_message": "Telemetry missing or outdated.", "Advisor_message": "Telemetry stale; no firm diagnosis.", "Agentic_level": "Retry", "Risk": "Low"}
+        return {
+            "Outcome": "Test incomplete",
+            "Action": "Retry test; escalate if persists.",
+            "Customer_message": "Telemetry missing or outdated.",
+            "Advisor_message": "Telemetry stale; no firm diagnosis.",
+            "Agentic_level": "Retry",
+            "Risk": "Low"
+        }
     if "Equipment replacement needed" in h:
-        return {"Outcome": "Replacement recommended", "Action": "Offer replacement equipment.", "Customer_message": "Suspected faulty equipment; replacement advised.", "Advisor_message": "Equipment fault suspected.", "Agentic_level": "Recommend replacement", "Risk": "Medium"}
+        return {
+            "Outcome": "Replacement recommended",
+            "Action": "Offer replacement equipment.",
+            "Customer_message": "Suspected faulty equipment; replacement advised.",
+            "Advisor_message": "Equipment fault suspected.",
+            "Agentic_level": "Recommend replacement",
+            "Risk": "Medium"
+        }
     if "Engineer visit needed" in h:
-        return {"Outcome": "Engineer visit required", "Action": "Schedule engineer visit.", "Customer_message": "Issue requires engineer support.", "Advisor_message": "Escalate to engineer.", "Agentic_level": "Escalate", "Risk": "Medium"}
+        return {
+            "Outcome": "Engineer visit required",
+            "Action": "Schedule engineer visit.",
+            "Customer_message": "Issue requires engineer support.",
+            "Advisor_message": "Escalate to engineer.",
+            "Agentic_level": "Escalate",
+            "Risk": "Medium"
+        }
     if "Poor WiFi signal" in h:
         step = "Move closer to the hub or WiFi booster, then retest."
         adv_note = "Recommend device relocation or WiFi improvements."
-        return {"Outcome": "Weak WiFi signal", "Action": step, "Customer_message": f"Weak WiFi detected. {step}", "Advisor_message": adv_note, "Agentic_level": "Recommend fix", "Risk": "Low"}
+        return {
+            "Outcome": "Weak WiFi signal",
+            "Action": step,
+            "Customer_message": f"Weak WiFi detected. {step}",
+            "Advisor_message": adv_note,
+            "Agentic_level": "Recommend fix",
+            "Risk": "Low"
+        }
     if "WiFi interference or congestion" in h:
-        return {"Outcome": "WiFi interference detected", "Action": "Optimize WiFi and retest.", "Customer_message": "WiFi interference detected; optimize setup.", "Advisor_message": "Suggest WiFi optimization.", "Agentic_level": "Recommend optimization", "Risk": "Low"}
+        return {
+            "Outcome": "WiFi interference detected",
+            "Action": "Optimize WiFi and retest.",
+            "Customer_message": "WiFi interference detected; optimize setup.",
+            "Advisor_message": "Suggest WiFi optimization.",
+            "Agentic_level": "Recommend optimization",
+            "Risk": "Low"
+        }
     if "Intermittent connectivity instability" in h:
-        return {"Outcome": "Unstable connection detected", "Action": "Monitor and retest; escalate if persists.", "Customer_message": "Connection unstable; please retest.", "Advisor_message": "Advise monitoring repeat issues.", "Agentic_level": "Monitor", "Risk": "Medium"}
-    return {"Outcome": "No issue found","Action": "No action needed.","Customer_message": "Connection is healthy.","Advisor_message": "No fault detected.","Agentic_level": "Explain","Risk": "Low"}
+        return {
+            "Outcome": "Unstable connection detected",
+            "Action": "Monitor and retest; escalate if persists.",
+            "Customer_message": "Connection unstable; please retest.",
+            "Advisor_message": "Advise monitoring repeat issues.",
+            "Agentic_level": "Monitor",
+            "Risk": "Medium"
+        }
+    return {
+        "Outcome": "No issue found",
+        "Action": "No action needed.",
+        "Customer_message": "Connection is healthy.",
+        "Advisor_message": "No fault detected.",
+        "Agentic_level": "Explain",
+        "Risk": "Low"
+    }
 
 def randomise_scenario(base):
     t = base.copy()
@@ -255,7 +348,7 @@ def run_agentic_test(t, scenario_key):
         "history": history
     }
 
-# --- Session initialization ---
+# Initialize session state keys
 if "result" not in st.session_state:
     st.session_state.result = None
 if "telemetry" not in st.session_state:
@@ -263,7 +356,6 @@ if "telemetry" not in st.session_state:
 if "scenario_used" not in st.session_state:
     st.session_state.scenario_used = None
 
-# --- App UI ---
 st.title("🛰️ Test SC Agentic AI Demo")
 
 random_mode = st.sidebar.checkbox("Random scenario every test", True)
@@ -366,5 +458,4 @@ if st.session_state.result:
 
 else:
     st.info("Click 'Test my connection' to start.")
-
 
